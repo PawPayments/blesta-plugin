@@ -1,0 +1,15 @@
+<?php
+// Auto-redirect the browser to the PawPayments hosted paywall, with a manual
+// fallback link for clients where the redirect is blocked.
+$payment_url = ($payment_url ?? '');
+?>
+<div class="pawpayments_redirect">
+    <p>
+        <a href="<?php echo $this->Html->safe($payment_url); ?>" class="btn btn-primary" id="pawpayments_pay_button">
+            <?php $this->_('Pawpayments.buildprocess.submit'); ?>
+        </a>
+    </p>
+</div>
+<script type="text/javascript">
+    window.location.href = <?php echo json_encode($payment_url); ?>;
+</script>

@@ -1,0 +1,30 @@
+
+<div class="mb-3">
+    <?php
+    $this->Form->label($this->_('Pawpayments.meta.api_key', true), 'api_key', ['class' => 'form-label']);
+    $this->Form->fieldText('api_key', ($meta['api_key'] ?? null), ['id' => 'api_key', 'class' => 'form-control']);
+    ?>
+    <span class="form-text text-muted"><?php $this->_('Pawpayments.meta.api_key_note'); ?></span>
+</div>
+<div class="mb-3">
+    <?php
+    $this->Form->label($this->_('Pawpayments.meta.api_base_url', true), 'api_base_url', ['class' => 'form-label']);
+    $this->Form->fieldText('api_base_url', ($meta['api_base_url'] ?? 'https://api.pawpayments.com'), ['id' => 'api_base_url', 'class' => 'form-control']);
+    ?>
+    <span class="form-text text-muted"><?php $this->_('Pawpayments.meta.api_base_url_note'); ?></span>
+</div>
+<div class="mb-3">
+    <?php
+    $this->Form->label($this->_('Pawpayments.meta.ttl', true), 'ttl', ['class' => 'form-label']);
+    $this->Form->fieldText('ttl', ($meta['ttl'] ?? '3600'), ['id' => 'ttl', 'class' => 'form-control']);
+    ?>
+    <span class="form-text text-muted"><?php $this->_('Pawpayments.meta.ttl_note'); ?></span>
+</div>
+
+<div class="title_row">
+    <h3><?php $this->_('Pawpayments.webhook'); ?></h3>
+</div>
+<div class="pad">
+    <p><?php $this->_('Pawpayments.webhook_note'); ?></p>
+    <code><?php echo Configure::get('Blesta.gw_callback_url') . Configure::get('Blesta.company_id') . '/pawpayments/'; ?></code>
+</div>
