@@ -92,7 +92,7 @@ https://yourdomain.com/callback/gw/{company_id}/pawpayments/
 
 | Step | Method | What happens |
 | ---- | ------ | ------------ |
-| Client clicks **Pay** | `buildProcess()` | Creates a PawPayments invoice (`POST /api/v2/invoices`, `billing_type=VARY`) and redirects the browser to `payment_url`. The Blesta invoice ids + client id ride along in `metadata`; the client id is also set as `extra`. |
+| Client clicks **Pay** | `buildProcess()` | Creates a PawPayments invoice (`POST /api/v2/invoices`, `billing_type=STATIC` — a fixed-price order stays open after an underpayment so the client can top it up) and redirects the browser to `payment_url`. The Blesta invoice ids + client id ride along in `metadata`; the client id is also set as `extra`. |
 | Payment confirms | `validate()` | PawPayments POSTs a signed webhook to the callback URL. The raw body is verified against `X-Paw-Signature`, the status is mapped, and the transaction is applied to the originating invoices. |
 | Client returns | `success()` | The browser lands on the Blesta return URL (`on_paid_url`) with the order id and invoice data appended, reconciling to the same `transaction_id` as the webhook. |
 

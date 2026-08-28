@@ -158,7 +158,10 @@ class Pawpayments extends NonmerchantGateway
             'extra' => (string) $client_id,
             'amount' => $amount,
             'fiat_currency' => $currency,
-            'billing_type' => 'VARY',
+            // Fixed-price order: STATIC keeps the invoice open after an underpayment so the
+            // customer can top it up; VARY (right for balance top-ups) finalises on the
+            // first payment, making a shortfall terminal.
+            'billing_type' => 'STATIC',
             'ttl' => (int) ($this->meta['ttl'] ?: 3600),
             'notify_url' => $callback_url,
             'on_cancel_url' => $return_url,
@@ -252,9 +255,18 @@ class Pawpayments extends NonmerchantGateway
             return [];
         }
 
+        // `fiat_amount` is what the deposit was worth when credited (live rate,
+        // net of commission); on a settled invoice it can land a fraction under
+        // the per-invoice amounts in `invoices`, which Blesta then refuses to
+        // apply in full. A still-open partial keeps the real amount received.
+        $amount = $status === 'approved'
+            ? max((float) ($payload['fiat_amount'] ?? 0),
+                  (float) ($payload['initial_fiat_amount'] ?? 0))
+            : ($payload['fiat_amount'] ?? $payload['amount'] ?? null);
+
         return [
             'client_id' => $client_id ?: null,
-            'amount' => $payload['fiat_amount'] ?? $payload['amount'] ?? null,
+            'amount' => $amount,
             'currency' => $payload['fiat_currency'] ?? ($this->currency ?? null),
             'invoices' => $invoices,
             'status' => $status,
