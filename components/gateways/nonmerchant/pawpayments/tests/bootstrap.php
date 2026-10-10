@@ -66,6 +66,17 @@ class NonmerchantGateway
     }
 }
 
+// Minimal Session stub: the signed-in client success() reports.
+class StubSession
+{
+    public static $data = [];
+
+    public function read($key)
+    {
+        return self::$data[$key] ?? null;
+    }
+}
+
 class StubView
 {
     /** @var array Captures values passed to set() so harnesses can assert on them. */
@@ -89,6 +100,9 @@ class Loader
         foreach ($components as $c) {
             if ($c === 'Input') {
                 $obj->Input = new StubInput();
+            }
+            if ($c === 'Session') {
+                $obj->Session = new StubSession();
             }
         }
     }

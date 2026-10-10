@@ -28,3 +28,4 @@ $lang['Pawpayments.!error.api_base_url.valid'] = 'Please enter a valid API Base 
 $lang['Pawpayments.!error.ttl.valid'] = 'Invoice TTL must be a whole number of seconds between 300 and 86400.';
 $lang['Pawpayments.!error.create.failed'] = 'The payment could not be created. Please try again or contact support.';
 $lang['Pawpayments.!error.signature.invalid'] = 'The webhook signature could not be verified.';
+$lang['Pawpayments.!error.not_configured'] = 'The PawPayments gateway is not configured (API key is empty).';

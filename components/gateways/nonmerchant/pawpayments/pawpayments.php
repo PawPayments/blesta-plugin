@@ -11,7 +11,8 @@
  *  - buildProcess(): POST /api/v2/invoices, redirect the client to payment_url.
  *  - validate():     server-to-server webhook (callback/gw/{company}/pawpayments/),
  *                    authenticated by the X-Paw-Signature HMAC header.
- *  - success():      client returns from the paywall to on_paid_url.
+ *  - success():      client returns to Blesta; informational only (pending, no
+ *                    amount), since its query string is client-controlled.
  *
  * @package blesta
  * @subpackage blesta.components.gateways.nonmerchant.pawpayments
@@ -197,13 +198,7 @@ class Pawpayments extends NonmerchantGateway
             return null;
         }
 
-        // Carry everything success() needs back through the on_paid_url query
-        // (and use the PawPayments order_id as the shared transaction_id so the
-        // webhook and the browser return reconcile to the same transaction).
         $this->view->set('payment_url', $payment_url);
-
-        $order_id = $data['order_id'] ?? '';
-        $this->updatePaidUrl($client, $order_id, $return_url, $client_id, $amount, $currency, $invoices);
 
         return $this->view->fetch();
     }
@@ -213,16 +208,40 @@ class Pawpayments extends NonmerchantGateway
      */
     public function validate(array $get, array $post)
     {
-        Loader::load(dirname(__FILE__) . DS . 'init.php');
+        return $this->handleWebhook(
+            (string) file_get_contents('php://input'),
+            (string) ($_SERVER['HTTP_X_PAW_SIGNATURE'] ?? '')
+        );
+    }
 
-        $raw_body = file_get_contents('php://input');
-        $signature = $_SERVER['HTTP_X_PAW_SIGNATURE'] ?? '';
-        $api_key = $this->meta['api_key'] ?? '';
+    /**
+     * validate() for one webhook request: the transaction Blesta records, or
+     * [] — with an HTTP status and input errors where it is a refusal — when
+     * there is nothing to record. Separate from validate() so the rules can be
+     * exercised with a body of the tests' choosing.
+     *
+     * @param string $raw_body The request body
+     * @param string $signature The X-Paw-Signature header
+     * @return array See validate()
+     */
+    private function handleWebhook($raw_body, $signature)
+    {
+        $api_key = (string) ($this->meta['api_key'] ?? '');
+        if ($api_key === '') {
+            header('HTTP/1.1 503 Service Unavailable');
+            $this->Input->setErrors(
+                ['gateway' => ['not_configured' => Language::_('Pawpayments.!error.not_configured', true)]]
+            );
+
+            return [];
+        }
+
+        Loader::load(dirname(__FILE__) . DS . 'init.php');
 
         $this->log($_SERVER['REQUEST_URI'] ?? 'pawpayments', $raw_body, 'output', true);
 
         // Reject anything that does not carry a valid HMAC signature
-        if ($raw_body === '' || $raw_body === false
+        if ($raw_body === ''
             || $signature === ''
             || !\PawPayments\Sdk\Webhook::verifyRawBody($raw_body, $signature, $api_key)
         ) {
@@ -248,21 +267,32 @@ class Pawpayments extends NonmerchantGateway
         $metadata = (array) ($payload['metadata'] ?? []);
         $client_id = (int) ($metadata['client_id'] ?? $payload['extra'] ?? 0);
         $invoices = $this->unserializeInvoices($metadata['invoices'] ?? '');
-        $status = $this->mapStatus($payload['status'] ?? '');
+        $gateway_status = (string) ($payload['status'] ?? '');
+        $status = $this->mapStatus($gateway_status, $payload['fiat_amount'] ?? null);
 
         if ($status === null) {
             // Non-terminal/ignored status (e.g. nothing actionable yet)
             return [];
         }
 
-        // `fiat_amount` is what the deposit was worth when credited (live rate,
-        // net of commission); on a settled invoice it can land a fraction under
-        // the per-invoice amounts in `invoices`, which Blesta then refuses to
-        // apply in full. A still-open partial keeps the real amount received.
-        $amount = $status === 'approved'
-            ? max((float) ($payload['fiat_amount'] ?? 0),
-                  (float) ($payload['initial_fiat_amount'] ?? 0))
-            : ($payload['fiat_amount'] ?? $payload['amount'] ?? null);
+        if ($gateway_status === 'cancelled' && $status === 'approved') {
+            // An expired STATIC invoice the client paid in part: the merchant
+            // keeps the partial, so the transaction recorded as pending for it
+            // is approved for that amount and applied to the invoices in order.
+            $amount = (float) $payload['fiat_amount'];
+            $invoices = $this->invoicesCoveredBy($invoices, $amount);
+        } elseif ($status === 'approved') {
+            // `fiat_amount` is what the deposit was worth when credited (live
+            // rate, net of commission); on a settled invoice it can land a
+            // fraction under the per-invoice amounts in `invoices`, which Blesta
+            // then refuses to apply in full.
+            $amount = max((float) ($payload['fiat_amount'] ?? 0),
+                          (float) ($payload['initial_fiat_amount'] ?? 0));
+        } else {
+            // A still-open partial keeps the real amount received (never
+            // `amount`, which is the crypto amount).
+            $amount = $payload['fiat_amount'] ?? null;
+        }
 
         return [
             'client_id' => $client_id ?: null,
@@ -278,18 +308,27 @@ class Pawpayments extends NonmerchantGateway
 
     /**
      * {@inheritdoc}
+     *
+     * The browser return proves nothing: anyone can open this URL with any
+     * query string. Report it as pending with no amount, invoices or
+     * transaction id, so nothing can be recorded or applied from it (nor a
+     * transaction id pre-claimed for another client), and for the client
+     * signed in to Blesta rather than one named in the query; the signed
+     * webhook handled by validate() is the only path that settles invoices.
      */
     public function success(array $get, array $post)
     {
-        $invoices = $this->unserializeInvoices($get['invoices'] ?? '');
+        // Never the client named in the query: the one signed in, if any.
+        Loader::loadComponents($this, ['Session']);
+        $client_id = (int) $this->Session->read('blesta_client_id');
 
         return [
-            'client_id' => isset($get['client_id']) ? (int) $get['client_id'] : null,
-            'amount' => $get['amount'] ?? null,
-            'currency' => $get['currency'] ?? ($this->currency ?? null),
-            'invoices' => $invoices,
-            'status' => 'approved',
-            'transaction_id' => $get['paw_order_id'] ?? null,
+            'client_id' => $client_id ?: null,
+            'amount' => null,
+            'currency' => $this->currency ?? null,
+            'invoices' => [],
+            'status' => 'pending',
+            'transaction_id' => null,
             'parent_transaction_id' => null,
         ];
     }
@@ -322,9 +361,10 @@ class Pawpayments extends NonmerchantGateway
      * Maps a PawPayments invoice status to a Blesta transaction status.
      *
      * @param string $status The PawPayments webhook status
+     * @param mixed $fiat_amount The webhook `fiat_amount` (value received)
      * @return string|null A Blesta transaction status, or null to ignore the event
      */
-    private function mapStatus($status)
+    private function mapStatus($status, $fiat_amount = null)
     {
         switch ($status) {
             case 'success':
@@ -333,8 +373,11 @@ class Pawpayments extends NonmerchantGateway
             case 'confirming':
             case 'partially_paid':
                 return 'pending';
-            case 'failed':
             case 'cancelled':
+                // `cancelled` is an expired STATIC invoice after a partial
+                // payment the merchant keeps; without one there is nothing.
+                return is_numeric($fiat_amount) && (float) $fiat_amount > 0 ? 'approved' : 'declined';
+            case 'failed':
             case 'high_risk':
                 return 'declined';
             default:
@@ -343,25 +386,26 @@ class Pawpayments extends NonmerchantGateway
     }
 
     /**
-     * Rewrites the invoice's on_paid_url so the browser return carries the data
-     * success() needs, keyed to the same order_id used by the webhook.
+     * The invoices an amount pays, in order, each for at most its own amount.
+     *
+     * @param array $invoices A numerically indexed array of invoices (id, amount)
+     * @param float $amount The amount to apply
+     * @return array The invoices with the amounts that $amount covers
      */
-    private function updatePaidUrl($client, $order_id, $return_url, $client_id, $amount, $currency, $invoices)
+    private function invoicesCoveredBy(array $invoices, $amount)
     {
-        if ($return_url === '') {
-            return;
+        $covered = [];
+        $remaining = round((float) $amount, 2);
+        foreach ($invoices as $invoice) {
+            if ($remaining <= 0) {
+                break;
+            }
+            $applied = min($remaining, round((float) $invoice['amount'], 2));
+            $covered[] = ['id' => $invoice['id'], 'amount' => $applied];
+            $remaining = round($remaining - $applied, 2);
         }
 
-        $query = http_build_query([
-            'paw_order_id' => $order_id,
-            'client_id' => $client_id,
-            'amount' => $amount,
-            'currency' => $currency,
-            'invoices' => $invoices,
-        ]);
-        $on_paid_url = $return_url . (strpos($return_url, '?') === false ? '?' : '&') . $query;
-
-        $this->view->set('on_paid_url', $on_paid_url);
+        return $covered;
     }
 
     /**

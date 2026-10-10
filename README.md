@@ -15,10 +15,10 @@ gateway callback URL.
   the gateway never needs to know which assets are supported.
 - **Signature verification** — every webhook is verified via `X-Paw-Signature`
   (HMAC-SHA256 of the raw body); unsigned or tampered requests are rejected with
-  HTTP 401.
+  HTTP 401, and every webhook gets HTTP 503 while no API key is configured.
 - **Idempotent** — the PawPayments `order_id` is used as the Blesta
-  `transaction_id`, so webhook retries and the browser return reconcile to the
-  same transaction instead of double-crediting.
+  `transaction_id`, so webhook retries reconcile to the same transaction
+  instead of double-crediting.
 - Webhooks carrying a `permanent_address_id` (not bound to a Blesta invoice) are
   silently acknowledged.
 
@@ -94,7 +94,7 @@ https://yourdomain.com/callback/gw/{company_id}/pawpayments/
 | ---- | ------ | ------------ |
 | Client clicks **Pay** | `buildProcess()` | Creates a PawPayments invoice (`POST /api/v2/invoices`, `billing_type=STATIC` — a fixed-price order stays open after an underpayment so the client can top it up) and redirects the browser to `payment_url`. The Blesta invoice ids + client id ride along in `metadata`; the client id is also set as `extra`. |
 | Payment confirms | `validate()` | PawPayments POSTs a signed webhook to the callback URL. The raw body is verified against `X-Paw-Signature`, the status is mapped, and the transaction is applied to the originating invoices. |
-| Client returns | `success()` | The browser lands on the Blesta return URL (`on_paid_url`) with the order id and invoice data appended, reconciling to the same `transaction_id` as the webhook. |
+| Client returns | `success()` | Informational only. The return URL's query string is client-controlled, so it is reported as `pending` for the client signed in to Blesta, with no amount, invoices or `transaction_id`; only the signed webhook records and applies payments. |
 
 ### Status mapping
 
@@ -102,7 +102,8 @@ https://yourdomain.com/callback/gw/{company_id}/pawpayments/
 | ------------------ | ------------- |
 | `success`, `paid_over` | `approved` |
 | `confirming`, `partially_paid` | `pending` |
-| `failed`, `cancelled`, `high_risk` | `declined` |
+| `cancelled` after a partial payment (`fiat_amount` > 0) | `approved` for that partial, applied to the invoices in order (the merchant keeps it) |
+| `cancelled` without a payment, `failed`, `high_risk` | `declined` |
 | anything else | ignored (no transaction recorded) |
 
 ---
@@ -110,8 +111,10 @@ https://yourdomain.com/callback/gw/{company_id}/pawpayments/
 ## Tests
 
 The bundled PHPUnit suite exercises the framework-independent logic (invoice
-serialization, status mapping, the `success()` return parser, and the vendored
-webhook signature check):
+serialization, status mapping, the non-authoritative `success()`, the vendored
+webhook signature check, and the signed webhook `validate()` handles: refused
+without a key or valid signature, the amount and invoices recorded for a paid,
+partly paid or expired-after-a-partial invoice):
 
 ```bash
 cd components/gateways/nonmerchant/pawpayments/tests
